@@ -1,0 +1,456 @@
+---
+title: "Wholesale Customers: multivariate analysis"
+author: "Olga Lalakulich"
+output: html_document
+---
+
+## Dataset
+
+You (The [Wholesale Customer Dataset](https://archive.ics.uci.edu/ml/datasets/Wholesale+customers) from UCI Machine Learning Repository[^data]) are a wholesale distributor in 3 regions: "Oporto" with 47 customers, "Lisbon" with 77 customers and "Other" with 316 customers, among them 298 are from the "Cafe" (including Hotels and Restaurants) distribution channel and 142 from "Retail". 
+
+```{r global_options, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+options(width=120)
+options(digits=3)
+```
+
+```{r packages, cache=FALSE, results='hide'}
+library(cluster)
+library(dplyr)
+library(GGally)
+library(ggplot2)
+library(knitr)
+library(MASS)
+library(reshape2)
+library(ROCR)
+```
+
+
+```{r, cache=TRUE, results='hide'}
+sale = read.csv("/home/olga/myR/WholesaleCustomer/WholesaleCustomer.csv", header=TRUE)
+colnames(sale)[7] = "Detergents" # rename "Detergents_Paper" for brevity
+sale = within(sale, {Channel[Channel == 1] <- "Cafe" 
+                     Channel[Channel == 2] <- "Retail" 
+                     Region[Region == 1] <- "Lisbon" 
+                     Region[Region == 2] <- "Oporto" 
+                     Region[Region == 3] <- "Other" } )
+sale[,c("Channel", "Region")] = lapply(sale[,c("Channel", "Region")], as.factor)
+```
+
+Here is few rows from your annual revenue dataset:
+```{r,  results='asis'}
+kable(head(sale), align="c")
+```
+
+Here is how many customers with a specific revenue range for each product for each "Cafe" or "Retail" group you have
+```{r histogram, echo=FALSE, fig.width=11, fig.height=5}
+# horizontal layout histograms - NONinteractive
+sale_melted = melt(sale,  id=c("Channel", "Region"))
+ggplot(sale_melted, aes(x=value)) + 
+        scale_x_log10(breaks=10^c(1,2,3,4,5), labels = c("10", "100", "1T", "10T", "100T")) +
+        facet_grid(Channel ~ variable) +
+        xlab("annual revenue") + ylab("number of customers") +
+        geom_histogram(aes(colour=Region, fill=Region), binwidth=0.2) +
+        theme_bw(base_size = 16) + theme(legend.position = "bottom")   
+```
+
+## Working with log-revenues instead of revenues
+The first important thing to notice is that the histograms look reasonably bell-shaped at the log-scale of revenues. Thus we transform our data from revenues to log-revenues. 
+
+Do log-numbers look unusual to you? Then you may ask: are there any other advantages of using those? Yes, log-revenues automatically care about the "percentage" difference between revenues (120 is 20% larger than 100, and 1200 is also 20% larger than 1000) rather than absolute difference. You can also think of log-value as "order of magnitude" or "count of digits in a number". Log-revenue of 2 means revenue of 100, log-revenue of 3 means revenue of 1000, log-revenue of 4 means revenue 10000, log-revenue of 2.5 means revenue is closer to 1000 than to 100.
+
+```{r}
+products = colnames(sale[,3:8]); #products
+sale$Total = rowSums(sale[,products]) # total revenue
+l1sale = sale;  l1sale[,3:9] = log10(1.+(sale[,3:9])) # df with logs
+```
+
+## Analysis of variance
+From the histograms above it looks like that mean revenues of Milk, Grocery and Detergent  (but not necessarily of Fresh, Frozen and Delicassen) are significantly different for Cafe and Retail customers.  There are parametric and non-parametric ways to test this hypothesis, with the key word being ANOVA=Analysis of variance.
+In such analysis the groups are considered and given and revenues as dependent variables. 
+
+Strictly speaking, ANOVA makes an assumptions on normality(which should rather be called "gaussianity"), homoscedasticity, and  independence of observations. For the data set under consideration there is no doubt about independence. 
+The other two properties are not necessarily satisfied.
+Practically speaking, there is a growing discussion, that many statistical methods are robust to deviations from gaussianity, and a reasonable bell-shape form of the histogram (as in our case) suffice for application of those methods. Even more, there are opinions, that normality tests should actually _never_ be applied. 
+
+Anyway one can first resort to non-parametric Kruskal-Wallis test. Small p-values (smaller than a chosen threshold, typically 0.05) show that we can reject the hypothesis that the mean values of revenues are the same for Retail and Cafe customers. This is so for each product separately as well as for the total revenue. 
+```{r}
+apply(l1sale[,3:9], 2, function(x) kruskal.test(x ~ Channel, data=l1sale)$p.value)
+```
+
+Two-sample t-test assumes gaussian distributions, but not necessarily homoscedasticity. It leads to similar results
+```{r}
+apply(l1sale[,3:9], 2, function(x) t.test(x ~ Channel, data=l1sale, var.equal=FALSE)$p.value)
+```
+
+If we consider classical anova applicable, the results are again similar
+```{r}
+apply(l1sale[,3:9], 2, function(x) anova(lm(x ~ Channel, data=l1sale))[["Pr(>F)"]][1])
+```
+
+Notice, however, that p-values for Fresh, Frozen and Delicassen are more than 25 _orders of magnitude_ higher than for Milk, Grocery and Detergents. This reflects somehow our intuition from the histograms.
+
+The differences between groups can be illustrated with boxplots (keep in mind though that the central line in boxplot shows median, not the mean value)
+```{r boxplot_channel, echo=FALSE, fig.width=11, fig.height=4}
+l1sale_melted = melt(l1sale[,1:8],  id=c("Channel", "Region"))
+ggplot(l1sale_melted, aes(y=value, x=Channel, color=Channel)) +
+        geom_boxplot(width=0.7) + 
+        facet_grid( . ~ variable) +
+        ylab("annual log-revenues") + ggtitle("Revenues are different for Retail and Cafe") +
+        theme_bw(base_size = 16) + theme(legend.position = "none")   
+```
+
+For different regions, p-values are large. Thus we _cannot_ reject the hypothesis than mean revenues are the same
+```{r}
+apply(l1sale[,3:9], 2, function(x) kruskal.test(x ~ Region, data=l1sale)$p.value)
+```
+
+Similar to the two-sample t-test, three groups can also be tested to have the same means
+```{r}
+apply(l1sale[,3:9], 2, function(x) oneway.test(x ~ Region, data=l1sale, var.equal=FALSE)$p.value)
+```
+
+Results from the classical anova are also similar
+```{r}
+apply(l1sale[,3:9], 2, function(x) anova(lm(x ~ Region, data=l1sale))[["Pr(>F)"]][1])
+```
+
+That difference between groups is small can be illustrated with the box- and violin-plots.
+```{r boxplot_region, echo=FALSE, fig.width=11, fig.height=6}
+ggplot(l1sale_melted, aes(y=value, x=Region, color=Region)) +
+        geom_violin() + geom_boxplot(width=0.3) + 
+        facet_wrap( ~ variable) +
+        ylab("annual log-revenues") + 
+        ggtitle("Different regions show no significant difference in revenues") +
+        theme_bw(base_size = 16) + theme(legend.position="none")
+```
+
+Here is the revenue comparison for different channels _and_ different regions
+```{r boxplot_channel_region, echo=FALSE, fig.width=11, fig.height=6}
+# interaction between Channel and Region
+l1sale_int <- l1sale_melted %>% group_by(Channel, Region, variable) %>% summarise(mea = median(value)) # median values
+ggplot(l1sale_melted, aes(y=value, x=Region, color=Channel, fill=Channel)) +
+        geom_boxplot(width=0.8, alpha=0.2) +
+        geom_point(data=l1sale_int, aes(y=mea)) + geom_line(data=l1sale_int, aes(y=mea, group=Channel)) +
+        facet_wrap( ~ variable) + 
+        ylab("annual log-revenues") + ggtitle("Revenues from different channels in different regions") +
+        theme_bw(base_size = 16)
+```
+
+## Discriminant analysis
+From the histograms above it looks like that the group of Retail customers differ from the group of Cafe customers in the revenues of Milk, Grocery and Detergent, while not necessarily in Fresh, Frozen and Delicassen. Is it indeed so? 
+To formulate this question more precisely: what combinations of revenues allows one to maximally separate various groups? In such analysis the revenues are considered and given and groups as dependent variables. 
+
+#### LDA = Linear discriminant analysis
+The most popular method is LDA. Omitting a discussion on it assumptions (multivariate gaussianity and identical covariance matrices for each group), I proceed with finding the linear combination that best separated classes  
+```{r}
+lda_ch = lda(Channel ~ ., data=l1sale[,c(1,3:8)], CV=FALSE) 
+lda_ch$scaling
+```
+
+The largest contributions to it are coming from Milk, Grocery and Detergent. Keeping in mind our histograms, this does not come as a surprise. Here is the density plot versus this linear discriminant "LD1" 
+```{r lda_hist, fig.height=6, fig.width=6}
+plot(lda_ch)
+```
+
+The mean values of each log-revenues for each group are 
+```{r lda_histograms}
+lda_ch$means
+```
+
+The quality of separation can be estimated by the ratio of the between- and within-group standard deviations
+```{r}
+lda_ch$svd
+```
+
+To estimate the quality of classification produced by the LDA we should use not the training set, but resort to cross validation. Since leave-one-out cross validation is built-in, let us use it. Here are the confusion matrix and the total percent of correctly classified customers
+```{r}
+lda_ch_cv = lda(Channel ~ ., data=l1sale[,c(1,3:8)], CV=TRUE) 
+ct_lda <- table(l1sale$Channel, lda_ch_cv$class); ct_lda # confusion matrix
+#diag(prop.table(ct, 1))  # percent correct for each Channel
+sum(diag(prop.table(ct_lda))) # total percent correct
+```
+This method can also provides the posterior probabilities of belonging to each group. Thus, we can asses the quality of the model with respect to more refined measures. Below, after discussing QDA, I will plot the ROC curve and calculate AUC.
+
+#### QDA = Quadratic discriminant analysis
+QDA differs from LDA in that it does not assume a common covariance matrix for all classes. This leads to more free parameters and thus to larger flexibility of the method. Since QDA uses quadratic functions, there are no easily interpretable linear discriminants. We can use this method to make predictions for unknown samples (here via leave-one-out cross validation). This results in the following confusion matrix and the total percent of correctly classified
+customers. The results appears to be a little worse than those for LDA
+```{r}
+qda_ch_cv = qda(Channel ~ ., data=l1sale[,c(1,3:8)], CV=TRUE, method="mle")
+ct_qda <- table(l1sale$Channel, qda_ch_cv$class); ct_qda # confusion matrix
+#diag(prop.table(ct, 1))  # percent correct for each Channel
+sum(diag(prop.table(ct_qda))) # total percent correct
+```
+
+#### Comparing ROC curves
+```{r lda_qda_roc, results='asis', fig.height=6, fig.width=7}
+roc_auc = function(da){
+    pred = prediction(predictions=da$posterior[,"Retail"], 
+                      labels=as.numeric(l1sale$Channel=="Retail"))
+    perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+    roc.auc = performance(pred, measure="auc"); 
+    return(list(perf=perf, auc=roc.auc@y.values[[1]]))
+}
+
+lda_roc_auc = roc_auc(lda_ch_cv)
+qda_roc_auc = roc_auc(qda_ch_cv)
+
+cutoffs = c(0.2,0.4, 0.5, 0.6, 0.8)
+plot(lda_roc_auc$perf, colorize=TRUE, lwd=3, 
+     main="ROC curve for LDA and QDA prediction of Retail channel",
+     print.cutoffs.at=cutoffs, text.adj=c(1.0,-0.5))
+plot(qda_roc_auc$perf, colorize=TRUE, lwd=3, main="ROC curve for LDA prediction of Retail channel", 
+     add=TRUE)
+text(-0.03, 0.99, "LDA", pos=4)
+text(0.1, 0.85, "QDA", pos=4)
+text(0.15,0.6,paste0("LDA  AUC = ", round(lda_roc_auc$auc,3)), pos=4)
+text(0.2,0.5,paste("cutoff positions at", paste(cutoffs, collapse=", ")),  pos=4)
+text(0.15,0.3,paste0("QDA  AUC = ", round(qda_roc_auc$auc,3)), pos=4)
+```
+
+The results of discriminant analysis should typically be compared with other classification methods such as
+logistic regression, support vector machines, neural nets. 
+
+
+## Factor analysis
+Revenues for some products are correlated with each other
+```{r}
+l1sale.cor = cor(l1sale[,products]); l1sale.cor
+```
+
+```{r l1sale_pairs, echo=FALSE, fig.width=11, fig.height=11}
+ggpairs(data=l1sale, columns=seq(3,8), mapping=ggplot2::aes(color=Channel), upper = list(size = 4)) + ggplot2::theme_bw()
+
+```
+
+Let us try to determine the (independent) latent variables responsible for the variety of the observed revenues. Suitable here is exploratory factor analysis.
+```{r}
+faa2 = factanal(l1sale[,products], factors=2, method="mle", rotation="varimax", scores="regression")
+print(faa2, digits = 2, cutoff = .2, sort = TRUE)
+```
+The chi-square statistic and p-value in "factanal" are the results of testing the hypothesis that the model fits the correlation matrix perfectly. When the p value is large (larger than your confidence level, typically 0.05), as it is here, we cannot reject this hypothesis. Thus, 2 factors are enough to explain the empirical covariance matrix.
+
+Let us check how well the true correlation matrix is approximated by the fitted one by computing difference between them. As expected, all differences are very small.
+```{r}
+faa2.cor.approx <- faa2$loadings %*% t(faa2$loadings) + diag(faa2$uniquenesses)
+round(l1sale.cor - faa2.cor.approx, 3)
+```
+
+Since factors are determined up to rotations, we have chosen the "varimax" rotation. This sparsifies the contribution of individual products and thus makes interpretation easier.
+
+2 factors can explain 57% of data variance. 
+
+* Factor1: mainly the sum of revenues for Milk, Grocery and Detergents 
+
+* Factor2: mainly the sum of Fresh, Frozen and Delicassen
+
+The exact contribution of each product to factor is shown here
+```{r faa2_factors, results='asis', fig.height=5, fig.width=7}
+ggplot(as.data.frame(unclass(faa2$loadings)), 
+                           aes(x=Factor1, y=Factor2) ) + geom_text(label=products) + 
+            theme_bw(base_size = 16) + ggtitle("Contribution of products to the two latent factors") 
+```
+
+And here are the two factors (found by "factanal") for each customer 
+```{r faa2_customers_nonin, echo=FALSE, results='asis', fig.height=7, fig.width=7}
+# non-interactive
+ggplot(cbind(l1sale, faa2$scores), 
+               aes(x=Factor1, y=Factor2, color=Channel, shape=Region)) + 
+               geom_text(aes(label=rownames(l1sale))) + 
+               scale_shape_discrete(solid=FALSE) +
+               theme_bw(base_size = 16) + ggtitle("Two factors for various customers")
+```
+
+
+Large uniquenesses show, however, that there is much more in this data than can be explained by two factors. 
+```{r}
+faa2$uniqueness
+```
+For each of the Fresh, Frozen and Delicassen more than 60% of the variability of revenue is not explained by the common factors. 
+
+## Cluster analysis
+
+Cluster analysis answer the questions: which customers belong together and can be combined in a group such that this group is noticeably different from other groups (formed on the same principle). Here I choose to work only with revenue data, in order to be able to check how the found clusters are related to known distribution channels and regions. 
+
+Cluster analysis is very sensitive to the meaningful distance between customers. And defining what "meaningful distance between customers" is,  is crucial for inferring business value. 
+
+A business user should ask himself
+
+* do I care more about the absolute revenues (rather log-revenues in our analysis) or do I accept that for some products (Fresh,  for example) revenues are generally higher than for others (Delicassen, for example) and I care more about the difference between the actual and the mean revenues for a given product 
+
+A mathematically aware business user should also ask himself
+
+* with 440 customers and 6 products I am operating with 440 points in 6D space. Does this makes sense or am I (my data, actually) under the curse of dimensionality? Should I perform dimensionality reduction?
+
+* how different is different? or, in mathematical terms, is my distance euclidean, manhattan or something else?
+
+
+#### Agglomerative hierarchical clustering suggest 2 or 3 clusters
+
+As good business user as I am, I am choosing to care about the difference to the mean, reduce dimensionality to 4, and use manhattan distance.
+```{r}
+scaled.pca4 = princomp(scale(l1sale[,products]))$scores[,1:4]
+di = dist(scaled.pca4, method="manhattan")  # manhattan distance
+```
+
+For agglomerative hierarchical clustering I choose "Ward" clustering method. It minimizes the total within-cluster variance and thus leads to most compact clusters possible. 
+```{r ag_dendogram}
+ag = agnes(di, diss=TRUE, method="ward")
+plot(ag, which=2, labels=FALSE, xlab="", sub="", 
+     main="Dendogram: 4-comp PCA, manhattan distance, Ward agglomeration") # dendrogram
+```
+
+The dendrogram suggest that 2 or 3 clusters are meaningful. Let us investigate 3 clusters
+```{r}
+l1sale$ag3 <- factor(cutree(ag, k = 3))
+table(l1sale$Channel, l1sale$ag3, dnn=c("Channel", "ag3") )
+```
+
+The third cluster consists mainly of Cafe customers, while the first and the second one include both Cafe and Retail. What about the revenues for each product?
+
+```{r ag3_revenues, echo=FALSE, fig.width=11, fig.height=6}
+group_color = c(rgb(31,119,180, maxColorValue = 255), 
+                rgb(255,127,14, maxColorValue = 255), 
+                rgb(44,160,44, maxColorValue = 255))
+l1sale_melted = melt(l1sale[,c("Channel", "Region", products, "ag3")],  id=c("Channel", "Region", "ag3"))
+ggplot(l1sale_melted, aes(y=value, x=ag3, color=ag3, fill=ag3)) +
+        geom_violin(alpha=0.1) + geom_boxplot(width=0.3, alpha=0) +
+        facet_wrap( ~ variable) +
+        scale_fill_manual(values=group_color) + 
+        scale_color_manual(values=group_color) + 
+        xlab("groups found by hierarchical clustering") +  ylab("annual log-revenues") + 
+        ggtitle("Revenues for 3 groups found by hierarchical clustering") +
+        theme_bw(base_size = 16) + theme(legend.position="left")
+```
+
+This set of boxplots shows that Group 3 (nearly all of those Cafe customers) buy less Milk, Grocery and Detergents than the other two groups. Among groups with mixed Cafe and Retail customers, groups 1 (30% Cafe 70% Retail low-revenue customers) buys less Fresh, Frozen and Delicassen  that group 2 (40% Cafe 60% Retail high-revenue customers). That's how these groups look like, when I choose axis as sum of revenues 
+
+Thus, the 3 groups found are 
+
+1) 40/60 mix Cafe Retail with low-to-middle total revenues due to low Fresh, Frozen
+
+2) 30/70 mix Cafe/Retail with high total revenues
+
+3) Cafe customers with low total revenues due to low Milk, Grocery and Detergents
+
+Let us depict customers versus easily interpretable axes: sums of revenues of specific products. The 3 "groups" found do not look like compact at all. 
+
+```{r ag3_clusters_nonintera, echo=FALSE, fig.width=8, fig.height=8}
+# non-interactive
+l1sale$mgd = log10(1+rowSums(sale[,c("Milk", "Grocery", "Detergents")]))
+l1sale$ffd = log10(1+rowSums(sale[,c("Frozen", "Fresh","Delicassen")]))
+plot(l1sale$mgd, l1sale$ffd, type="n", xlab="log-revenue Milk + Grocery + Detergents", 
+                      ylab="log-revenue Frozen + Fresh + Delicassen",
+                      main="3 groups found by hierarchical clustering: revenues")
+group_color = c("orangered3", "dodgerblue3", "darkgreen")
+text(l1sale$mgd, l1sale$ffd, rownames(l1sale), col=group_color[l1sale$ag3])
+```
+
+Can it be related to the "unfortunate" choice of axes?
+Let us try with the "most fortunate" possible axis (the first two PCA components)
+```{r ag3_clusters_pc12}
+clusplot(l1sale[,products], l1sale$ag3, color=TRUE, shade=FALSE, labels=3, lines=0,
+         col.p=group_color[as.integer(l1sale$ag3)], 
+         col.clus=group_color[c(1,3,2)],
+         main="3 groups found by hierarchical clustering")
+```
+
+No success either.  How shall we interpret this?
+
+A good tool to assess the quality of clustering is the silhouette diagram.
+It shows which objects lie well within their cluster, and which ones are merely somewhere in between clusters. 
+```{r ag3_silhouette, message=FALSE, warning=FALSE, fig.show='asis', fig.keep='all'}
+si.ag3 = silhouette(as.numeric(l1sale$ag3), di); 
+plot(si.ag3, col=group_color, border=NA,
+                main="Silhouette plot for 3 groups from aglomerative clustering")
+```
+
+With more than few negative values the silhouette diagram does not look good. With average silhouette widths of 0.10, 0.29 and 0.25, the clustering should be assessed as "no substantial structure has been found".
+
+#### Partitioning around medoinds: a robust version of K-means
+
+Let us look at the 3 cluster from the point of view of K-medoids algorithms. This can be considered as a more robust version of k-means, which searches for k representative objects ("medoids") among data points. 
+These "medoid customers" should represent the "typical customer" of the group.
+```{r}
+pam3 = pam(di, k=3, diss=TRUE, cluster.only=FALSE)
+l1sale$pam3 = as.factor(pam3$cluster)
+table(l1sale$Channel, l1sale$pam3, dnn=c("Channel", "pam3")) # compare clusters distribution Channels
+```
+Groups 2 and 3 consist mainly of Cafe customers, while group 1 from Retail customers. 
+The separation of distribution channels here is better than one achieved in the agglomerative hierarchical clustering. What is the difference in revenues? 
+
+```{r pam3_revenues, echo=FALSE, fig.width=11, fig.height=6}
+group_color = c("firebrick2", "deepskyblue3", "springgreen")
+l1sale_melted = melt(l1sale[,c("Channel", "Region", products, "pam3")],  id=c("Channel", "Region", "pam3"))
+ggplot(l1sale_melted, aes(y=value, x=pam3, color=pam3, fill=pam3)) +
+        geom_violin(alpha=0.1) + geom_boxplot(width=0.3, alpha=0) +
+        scale_fill_manual(values=group_color) + 
+        scale_color_manual(values=group_color) + 
+        facet_wrap( ~ variable) +
+        xlab("groups found by PAM") +  ylab("annual log-revenues") + 
+        ggtitle("Revenues for 3 groups found by partitioning around medoids") +
+        theme_bw(base_size = 16) + theme(legend.position="left")
+```
+
+Thus, the 3 groups found are 
+
+1) mostly Retail customers with high Milk, Grocery, Detergent revenues
+
+2) mostly Cafe customers  with low Milk, Grocery, Detergent revenues
+
+3) mostly Cafe customers with medium Milk, Grocery, Detergent revenues
+
+The difference between Fresh, Frozen and Delicassen for all groups is relatively small
+
+Here are the log-revenues of the "typical customers" found 
+```{r}
+l1sale[pam3$medoids, c("pam3", products, "Total")]
+```
+
+With  sums of revenues of specific products on axis, here are the 3 customer "groups" 
+```{r pam3_clusters_nonintera, echo=FALSE, fig.width=8, fig.height=8}
+# non-interactive
+plot(l1sale$mgd, l1sale$ffd, type="n", xlab="log-revenue Milk + Grocery + Detergents", 
+                      ylab="log-revenue Frozen + Fresh + Delicassen",
+                      main="3 groups found by partitioning around medoids: revenues")
+text(l1sale$mgd, l1sale$ffd, rownames(l1sale), col=group_color[l1sale$pam3])
+```
+
+This is a pretty much different clustering than the one found by the agglomerative method.
+
+Does partitioning around medoids indeed found distinct clusters in this dataset? 
+Silhouette plot (low values of silhouette width) again indicates no significant structure in data.
+```{r pam3_silhouete}
+si.pam3 = silhouette(as.numeric(l1sale$pam3), di)
+plot(si.pam3, col=group_color, border=NA, main="Silhouette plot for 3 groups found by PAM")
+```
+
+#### What to do or is clustering meaningful for this dataset?
+
+Having done the cluster analysis, several questions are pending
+
+* Do these results  actually mean that our customers cannot be structured?
+
+* Is it meaningful for this data to assume that there are several distinct groups and enforce searching for distinct groups?
+
+If one still wants to search for distinct groups, it may be reasonable to reconsider what the "distance between customers" mean. As it was shown with histograms and boxplots, the main difference lies in 3 products out of 6. At the same time, the distance considered so far tried to take into account all 6. The ways out of this situation (and out of the curse of dimensionality) I will discuss in the more extensive "Wholesale Customers: cluster analysis" write-up. Ideally it would be nice not to guess the appropriate distance matrix, but let the algorithm to determine it.
+
+Here I discuss another question: why are we actually trying so hard to "put a single label" on each customer?
+
+* I am aiming at more natural "segmentation" of customers, which behave somehow "in the same way" with respect to at least some products (even though there are no distinct groups). Neighbor segments should be similar. Thus it will be not so important to which segment exactly a given customer belongs and how many segments exactly there are.
+
+## Customer segmentation
+
+Similar customers are in one segment. Neighbor segments are similar to each other in some products.
+
+
+### Contact: Olga Lalakulich olalakul@gmail.com
+
+### References
+
+[^data]: https://archive.ics.uci.edu/ml/datasets/Wholesale+customers 
+The data set is originated from a larger database referred on:
+Abreu, N. (2011). Analise do perfil do cliente Recheio e desenvolvimento de um sistema promocional. Mestrado em Marketing, ISCTE-IUL, Lisbon 
+
+
+

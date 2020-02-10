@@ -1,0 +1,313 @@
+---
+title: "Wholesale Customers: whom can I offer more Frozen?"
+author: "Olga Lalakulich"
+output: html_document
+---
+
+### Dataset
+
+You (The [Wholesale Customer Dataset](https://archive.ics.uci.edu/ml/datasets/Wholesale+customers) from UCI Machine Learning Repository[^data]) are a wholesale distributor in 3 regions: "Oporto" with 47 customers, "Lisbon" with 77 customers and "Other" with 316 customers, among them 298 are from the "Cafe" (including Hotels and Restaurants) distribution channel and 142 from "Retail". 
+
+```{r set-options, echo=FALSE, cache=TRUE, results='hide', warning=FALSE, message=FALSE }
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+library(bnlearn)
+library(gRim)
+library(clickme)
+library(googleVis)
+library(knitr)   # for kable
+library(pander)  # nice output for vectors
+library(Rgraphviz)
+library(Rtsne)
+library(scales) # for rescale
+options(width=120)
+options(digits=3)
+```
+
+```{r, echo=FALSE, results='hide' }
+setwd("~/myR/WholesaleCustomer")
+```
+
+
+```{r, echo=TRUE, cache=TRUE, results='hide'}
+sale = read.csv("WholesaleCustomer.csv", header=TRUE)
+colnames(sale)[7] = "Detergents" # rename "Detergents_Paper" for brevity
+sale = within(sale, {Channel[Channel == 1] <- "Cafe" 
+                     Channel[Channel == 2] <- "Retail" 
+                     Region[Region == 1] <- "Lisbon" 
+                     Region[Region == 2] <- "Oporto" 
+                     Region[Region == 3] <- "Other" } )
+sale[,c("Channel", "Region")] = lapply(sale[,c("Channel", "Region")], as.factor)
+```
+
+Here is few rows from your annual revenue dataset:
+```{r, echo=TRUE}
+kable(head(sale), align="c")
+```
+
+
+As discussed in the [multivariate analysis  write-up ](https://rawgit.com/olalakul/Wholesale-multivariate-analysis/master/wholesale-multivariate.html),  I transform revenues to log-revenues. 
+
+```{r, echo=TRUE}
+products = colnames(sale)[3:8]; #products
+l1sale = sale;  l1sale[,products] = log10(1.+(sale[,products])) # df with logs
+```
+
+In the [write-up for finding similar customers](https://rawgit.com/olalakul/Wholesale-SimilarCustomers/master/wholesale-similar.html),
+I searched for customers similar on the annual revenues for all products and found that those are naturally grouped by the size of the total revenue and belonging to "Cafe" or "Retail" distribution channel.
+
+Now I am addressing the question on  how such similarity can be used for business purposes.
+
+### Finding similar customers to offer more Frozen
+
+Suppose that one day (or one week) you have by chance an unexpected surplus of Frozen. 
+Or you are searching for opportunity to sell more Frozen on purpose.
+Whom can/should you offer more?
+
+Let us find out, which customers are similar with respect to the other 5 product (Fresh, Delicassen, Milk, Grocery, Detergents) and see if they folow  any natural pattern on Frozen. 
+Recall, that mathematically speaking here I am "collapsing" a 5-dimentional space to 2 dimesions, preserving small distances as possible for the price of disturbing the large distances. Thus, the result is a picture and not a metric plot.
+
+For your upselling opportunities, the idea is to identify the customers with the lowest (let us say, the lowest 10%) Frozen revenue and 
+check if any of them is similar (on 5 other products) to customers with high (let us say, we distinguish above median and the highest 10%) revenue on Frozen. 
+
+```{r frozen_level, echo=TRUE, results='hide', out.width=11, fig.height=5}
+frozen_level = cut(l1sale$Frozen, 
+                   breaks=quantile(l1sale$Frozen, c(0, 0.1, 0.5, 0.9, 1)),
+                   ordered_result = TRUE,
+                   labels = c("lowest", "below_median", "above_median", "highest") )
+```
+
+
+```{r for_frozen, echo=FALSE, results='hide'}
+# tSNE
+set.seed(2)
+tsne1 <- Rtsne(as.matrix(l1sale[,c(3,4,5,7,8)]), check_duplicates = FALSE, pca = FALSE, initial_dims=6,
+              perplexity=15, theta=0.1, dims=2, verbose=TRUE, max_iter=1000)
+#sum(tsne$costs) #perple=5, 1-0.8 2- 0.79 #3-0.7955 # perplex15 1_0.7
+
+embedding1 <- as.data.frame(tsne1$Y)
+embedding1 = apply(embedding1, 2, function(x){rescale(x, to=c(0,1))})
+#head(embedding)
+
+cm1 = clickme("points", x=embedding1, y_format = list(x = "", y = ""), dir = getwd(), file_name = "frozen.html",
+      palette = c(lowest="blue", below_median="khaki", above_median="chocolate", highest="orangered"),
+      color_groups=frozen_level,
+      names=rownames(sale), radius=l1sale$Frozen*3, opacity=0.3,
+      extra=l1sale[,c("Frozen", "Fresh", "Milk", "Grocery",  "Detergents", "Delicassen")],
+      title = "Customers similar on all products except Frozen",
+      subtitle = "size ~ Frozen")
+
+```
+
+
+```{r simiar_for_frozen, echo=FALSE, results='asis', out.width=11, fig.height=5}
+cm1$iframe()
+```
+Most of customers are indeed naturally grouped by comparable Frozen revenues.
+
+Have a look at customers 39, 217, 139, 404, 430, 440 though. They are my first candidates to offer more Frozen.
+
+By the way, another way to approach such tasks was discussed at the end of [multivariate analysis write-up](https://rawgit.com/olalakul/Wholesale-multivariate-analysis/master/wholesale-multivariate.html)
+
+
+For further analysis let us concentrate on customer 139. His neighbors with respect to the 5 other products (the neighbors on the plot above) are 235, 196, and 241.
+To estimate how "similar" are the neighbors, we calculate the standard deviations of their revenues for each product. The smaller the standard deviation, the more similar customers are. 
+```{r sd_for_139_all, echo=TRUE}
+kable(l1sale[c(139, 235, 196, 241),], align="c")
+nei139_from5p =  apply(l1sale[c(39, 235, 196, 241),3:8], 2, sd); 
+pander(nei139_from5p)
+```
+We will return to these numbers later.
+
+### Which products are related to each other?
+
+I am nearly happy with the picture above. The problem is that next year you are extending the range of products and expect to double or triple the number of product categories. Thus you want to go beyond
+the concept of "somehow similar" and start understanding which categories are relevant for your task. Approach this problem by learning a bayesian net from your data!
+
+#### Products only
+
+First let me stick to the 6 products we considered above. There are several methods to learn the structure of the data. As usual, no method is perfect, some are just useful).  For the dataset under consideration they converge to the same undirected graph 
+
+```{r, echo=FALSE, results="hide"}
+# iamb
+bn_iamb = iamb(l1sale[,products], test="cor", alpha=0.05, debug=FALSE)
+print(bn_iamb)
+
+#plot(bn_iamb, main = "BN iamb")
+#score(bn_iamb, data=l1sale[,products], type="bic")
+
+#plot(bn_iamb)
+# graphviz.plot(bn_iamb, layout="neato", shape="ellipse", 
+#                    highlight=list(nodes=nodes(bn_iamb), col="seagreen"))
+
+# plot(as.graphNEL(bn_iamb), "neato")
+
+
+# # gs
+# bn_gs = gs(l1sale[,products], test="cor", alpha=0.05)
+# print(bn_gs)
+# plot(bn_gs, main = "BN gs")
+# #score(bn_gs, data=l1sale[,products], type="bge")
+# 
+```
+
+
+```{r network_cont, echo=FALSE, results="asis", fig.keep='last'}
+# gp = graphviz.plot(bn_iamb)
+# plot(gp,
+#      "neato", attrs=list(node=list(shape="ellipse", color="green", 
+#                                        fixedsize=FALSE, fontsize=12, height=0.8, width=2),
+#                             edge=list(arrowhead="none", arrowtail="none", arrowsize=0)))
+
+```
+
+
+```{r network_continuous, echo=FALSE, results="asis"}
+# layout can be dot, neato, twopi, circo and fdp
+graphviz.plot(bn_iamb, layout="neato", shape="ellipse", main = "Bayes net for 6 product categories",
+              highlight = list(nodes=nodes(bn_iamb), col="seagreen"))
+```
+
+#### Include Region and Channel
+
+Let us see try to include Region and Channel to our network. 
+
+After
+[multivariate analysis](https://rawgit.com/olalakul/Wholesale-multivariate-analysis/master/wholesale-multivariate.html), it comes as no surprise that Region is independent of other variables. Thus we know, that customers from different regions are behaving similarly (which makes our business life a bit easier). 
+
+Otherwise, the network includes all the previous edges and two mode edges including Channel.
+To express this mathematically: given Detergents and Grocery, Channel is conditionally independent on other products.
+
+```{r, echo=FALSE, results="hide"}
+#mm = mmod(~.^., data=l1sale)
+#mm_2 = stepwise(mm, k=log2(nrow(l1sale)), details=2)
+
+#iplot(mm2)
+#plot(mm_2)
+#iplot(mm_2)
+
+inde = mmod(~.^1, data=l1sale)
+inde_2 = forward(inde, k=log2(nrow(l1sale)), details=0)
+
+#plot(inde_2)
+
+
+# ---  update model by deleting the edge
+#testdelete(inde_2, ~Frozen:Milk) # Frozen-Milk can be deleted
+inde_2_updated <- update(inde_2, list(dedge=~Frozen:Milk))
+
+#graph.par(list(nodes = list(col = "green", lty = "dashed", lwd = 2, fontsize = 24)))
+#plot(inde_2_updated)
+
+# neato - geometric distance between nodes approximates their path distance in the graph
+# fdp - adjacent node are attracted and non-adjacent are repulsed 
+
+# default layout is "dot" ?dot
+# In dot, higher edge weights have the effect of causing edges to be shorter and straighter.
+# plot(as(inde_2_updated, "graphNEL"), 
+#      attrs=list(node=list(shape="ellipse", color="green", 
+#                           fixedsize=FALSE, fontsize=14, height=1, width=3)),
+#      nodeAttrs=list(shape=list(Channel="rectangle", Region="rectangle"),
+#                     color=list(Channel="blue", Region="blue")) )
+
+#testdelete(inde_2, ~Delicassen:Milk) # Delicassen-Milk can NOT be deleted
+
+#testdelete(inde_2, ~Frozen:Detergents) # Frozen-Detergents can NOT be deleted
+
+#testdelete(inde_2, ~Grocery:Detergents) # Frozen-Detergents can NOT be deleted
+```
+
+
+```{r network_all, echo=FALSE, results="asis"}
+# "neato"
+plot(as(inde_2_updated, "graphNEL"), "neato",
+     attrs=list(node=list(shape="ellipse", color="green", 
+                          fixedsize=FALSE, fontsize=10, height=0.3, width=1)),
+     nodeAttrs=list(shape=list(Channel="rectangle", Region="rectangle"),
+                    color=list(Channel="blue", Region="blue")) )
+
+```
+
+### What does this mean for Frozen?
+
+Given the two networks above, we can derive the dependencies of Frozen. 
+Given Fresh, Delicassen and Detergents, Frozen is conditionally independent on Milk and Grocery.
+
+How does this matter to us?
+When searching for similar customers with the purpose to find potential buyers of Frozen, we should only take into account the similarity with respect to Fresh, Delicassen and Detergents.
+
+
+```{r for_frozen_3, echo=FALSE, results='hide'}
+set.seed(2)
+tsne2 <- Rtsne(as.matrix(l1sale[,c("Fresh", "Delicassen", "Detergents")]), 
+              check_duplicates = FALSE, pca = FALSE, initial_dims=6,
+              perplexity=15, theta=0.1, dims=2, verbose=TRUE, max_iter=1000)
+#sum(tsne$costs) #perple=5, 1-0.8 2- 0.79 #3-0.7955 # perplex15 1_0.7
+        
+embedding2 <- as.data.frame(tsne2$Y)
+embedding2 = apply(embedding2, 2, function(x){rescale(x, to=c(0,1))})
+#head(embedding)
+
+cm2 = clickme("points", x=embedding2, y_format = list(x = "", y = ""), dir = getwd(), file_name = "frozen3.html",
+      palette = c(lowest="blue", below_median="khaki", above_median="chocolate", highest="orangered"),
+      color_groups=frozen_level,
+      names=rownames(sale), radius=l1sale$Frozen*3, opacity=0.3,
+      extra=l1sale[,c("Frozen", "Fresh", "Milk", "Grocery",  "Detergents", "Delicassen")],
+      title = "Customers similar on Fresh, Delicassen, Detergents",
+      subtitle = "size ~ Frozen")
+
+```
+
+
+```{r similar_for_frozen_3, echo=FALSE, results='asis', out.width=11, fig.height=5}
+cm2$iframe()
+```
+
+How is this better than the earlier picture? The answer is related to how similar are "similar".
+
+Let us return to the customer 139. His neighbors on the plot above (that is with respect to Fresh, Delicassen and Detergents) are 385, 335, 235.
+To estimate how "close" are these neighbors, we calculate the standard deviation for each product.
+```{r sd_for_139_only3, echo=TRUE}
+kable(l1sale[c(139, 385, 335, 235),], align="c")
+nei139_from3p = apply(l1sale[c(139, 385, 335, 235),3:8], 2, sd); 
+print(nei139_from3p)
+```
+
+For the target variables Fresh, Delicassen and Detergent those 4 are much close to each other than the previously found neighbors  235, 196, and 241. Recall, that previous standard devialtions were 
+```{r, echo=TRUE}
+pander(nei139_from5p)
+```
+
+The following barchart shows the standard deviation of revenues for customer 139 and his neighbors when those neighbors are choosen in different ways.
+When choosing neighbors with respect to 3 products only (Fresh, Delicassen and Detergents), the group becomes closer (the standard deviation lower) on these products, while more disperse on other products.  
+
+```{r nei139, echo=FALSE, results='asis'}
+# googleVis 
+colorder = c("Fresh", "Delicassen", "Detergents", "Frozen", "Milk", "Grocery")
+dd = data.frame(neighbors_5products = nei139_from5p[colorder],
+                neighbors_FreshDelicassenDetergents=nei139_from3p[colorder])
+dd$product = rownames(dd)  
+
+sd_139 = gvisColumnChart(dd, xvar="product",
+        options=list(title="Std of revenue for customer 139 and his neighbors",
+                    titleTextStyle='{fontSize: 20, fontName:"Arial"}',
+                    width=800, height=300,  legend='{position: "top"}', 
+                    vAxis='{title:"standard deviation of revenue"}',
+                    hAxis='{title:"products"}')
+                    )
+print(sd_139, 'chart') 
+#plot(sd_139)
+
+```
+
+
+### Whom do I offer more Detergents?
+
+You have no doubt, that similar analysis can be made for any of the products, don't you?
+
+### Contact: Olga Lalakulich olalakul@gmail.com ###
+
+### References ###
+
+[^data]: https://archive.ics.uci.edu/ml/datasets/Wholesale+customers 
+The data set is originated from a larger database referred on:
+Abreu, N. (2011). Analise do perfil do cliente Recheio e desenvolvimento de um sistema promocional. Mestrado em Marketing, ISCTE-IUL, Lisbon 

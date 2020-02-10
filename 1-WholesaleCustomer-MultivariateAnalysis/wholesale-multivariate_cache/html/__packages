@@ -1,0 +1,16 @@
+base
+methods
+datasets
+utils
+grDevices
+graphics
+stats
+cluster
+dplyr
+GGally
+ggplot2
+knitr
+MASS
+reshape2
+gplots
+ROCR

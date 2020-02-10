@@ -1,0 +1,244 @@
+---
+title: "Which of my customers are similar?"
+author: "Olga Lalakulich olalakul@gmail.com"
+output: html_document
+---
+
+You (The [Wholesale Customer Dataset](https://archive.ics.uci.edu/ml/datasets/Wholesale+customers) from UCI Machine Learning Repository[^data]) are a wholesale distributor in 3 regions: "Oporto" with 47 customers, "Lisbon" with 77 customers and "Other" with 316 customers, among them 298 are from the "Cafe" (including Hotels and Restaurants) distribution channel and 142 from "Retail". 
+
+```{r firstchunk, cache=TRUE, echo=FALSE, warning=FALSE, message=FALSE, results='hide' }
+setwd("~/myR/WholesaleCustomer")
+#source("~/myR/functions/plotting.R")
+sale = read.csv("WholesaleCustomer.csv", header=TRUE)
+str(sale)
+sale = within(sale, {Channel[Channel == 1] <- "Cafe" 
+                     Channel[Channel == 2] <- "Retail" 
+                     Region[Region == 1] <- "Lisbon" 
+                     Region[Region == 2] <- "Oporto" 
+                     Region[Region == 3] <- "Other" } )
+sale[,"Channel"] = factor(sale[,"Channel"])
+sale[,"Region"] = factor(sale[,"Region"])
+
+#products = colnames(sale)[3:8]
+
+```
+
+Here is few rows from your annual revenue dataset:
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(clickme)
+library(ggplot2)
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+options(width=1200)
+library(reshape2)
+library(Rtsne)
+library(scales)
+kable(head(sale))
+sale_melted = melt(sale,  id=c("Channel", "Region"))
+```
+
+Here is how many customers with a specific revenue range for each product for each "Cafe" or "Retail" group you have
+
+```{r, echo=FALSE, fig.width=11, fig.height=5}
+# horizontal layout histograms - NONinteractive
+p <- ggplot(sale_melted, aes(x=value)) 
+p_log = p + scale_x_log10(breaks=10^c(1,2,3,4,5), labels = c("10", "100", "1T", "10T", "100T"))
+#p1 = p + facet_grid(variable ~ Channel) 
+p_fa = p_log + facet_grid(Channel ~ variable) 
+p_lab = p_fa +  xlab("average annual revenue") + ylab("number of customers") 
+#p3 = p2 + opts(legend.position = c(0, 0.3))  
+p_hist = p_lab + geom_histogram(aes(colour=Region, fill=Region))
+p_fi = p_hist + theme_bw() + theme(legend.position = "bottom")   
+p_fi
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=7, fig.height=12}
+# vertical layout histograms - NONinteractive
+# p <- ggplot(sale_melted, aes(x=value)) 
+# p_log = p + scale_x_log10(breaks=10^c(1,2,3,4,5), labels = c("10", "100", "1T", "10T", "100T"))
+#  #p1 = p + facet_grid(variable ~ Channel) 
+# p_fa = p_log + facet_grid(variable ~ Channel) 
+# p_lab = p_fa +  xlab("average annual revenue") + ylab("number of customers") 
+#  #p3 = p2 + opts(legend.position = c(0, 0.3))  
+# p_hist = p_lab + geom_histogram(aes(colour=Region, fill=Region))
+# p_fi = p_hist + theme_bw() # + theme(legend.position = "bottom")   
+# p_fi
+
+```
+
+
+
+
+```{r, echo=FALSE, results='asis'}
+# sale_pca = princomp(scale(log10(sale[,3:8])))
+# sale_pca$sdev
+# sale_pca$loadings
+# sale_pca$center
+# sale_pca$scale
+# # 
+# sale_svd = svd(scale(log10(sale[,3:8])))
+# sale_svd$d
+# sale_svd$v
+
+    # 1st ~ Milk + Grocery + Detergents
+    # 2nd ~ Fresh + Frozen
+    # 3rd ~ Fresh - Frozen
+    # 4th ~ Milk - Detergent
+    # 5th ~ Grocery - Detergent
+
+#for columns 3:8 
+    # 1st ~ Milk + Grocery + Detergents
+    # 2nd ~ Fresh + Frozen + Delicassen
+    # 3rd ~ Fresh - Delicassen
+    # 4th ~ frozen - Fresh + Frozen - Delicassen
+    # 5th ~ Grocery - Milk + Grocery - Detergent
+
+```
+
+
+
+```{r, echo=FALSE, results='asis'}
+sale[,"Total"] = rowSums(sale[,3:8])    
+#sale_enh = sale
+sale[,"ID"] = rownames(sale)
+#sale_enh[,"Milk+Grocery+Detergents"] = log10(rowSums(sale_enh[,c("Milk", "Grocery", "Detergents_Paper")]))
+#sale_enh[,"Fresh+Frozen"] = log10(rowSums(sale_enh[,c("Frozen", "Fresh")]))
+sale[,"MilkGroceryDetergents"] = rowSums(sale[,c("Milk", "Grocery", "Detergents_Paper")])
+#sale[,"FreshFrozen"] = rowSums(sale[,c("Frozen", "Fresh")])
+sale[,"FreshFrozenDelicassen"] = rowSums(sale[,c("Frozen", "Fresh","Delicassen")])
+#sale_enh[,"sqrtTotal"] = sqrt(sale_enh[,"Total"])
+#sale_enh[,"logTotal"] = log(sale_enh[,"Total"])
+#ff = sale_enh[,"Fresh"]-sale_enh[,"Frozen"]    
+#sale_enh[,"Fresh-Frozen"] = sign(ff)*log10(1+abs(ff))  
+#sale_enh[,"sqrtTotal"] = sqrt(sale_enh[,"Total"])
+```
+
+We immediately see that typical revenues are different for diffrent products.
+For some products typical revenues are different for "Retail" and "Cafe" distribution channels.
+
+#### What is the main difference between customers?  
+
+The evident difference between our customers is total revenue. Can be go beyond that and seach for more subtle differences? We pay attention to the difference between the revenue for the corresponding product and its typical scale. 
+
+"Retail" customers are typically buying more Milk, Groccery and Detergent (taken together). 
+Large total revenues (large symbol size) can be generated in each group, but with different products.
+Hover the mouse over the various points to see the actual numbers.
+
+
+```{r, echo=FALSE, results='asis', fig.width=8, fig.height=6}
+# NON-interactive
+# p <- ggplot(sale, aes(x=rowSums(sale_enh[,c("Milk", "Grocery", "Detergents_Paper")]),
+#                       y=rowSums(sale_enh[,c("Frozen", "Fresh")]))) 
+# p_log = p + scale_x_log10(breaks=10^c(1,2,3,4,5,6), labels = c("10", "100", "1000", "10K", "100K", "1M")) + 
+#             scale_y_log10(breaks=10^c(1,2,3,4,5,6), labels = c("10", "100", "1000", "10K", "100K", "1M"))
+# # #p1 = p + facet_grid(variable ~ Channel) 
+# # p_fa = p_log + facet_grid(Channel ~ variable) 
+# p_lab = p_log +  xlab("Milk+Grocery+Detergents") + ylab("Fresh+Frozen") 
+# p_scatter = p_lab + geom_point(aes(colour=Channel, size=Total), alpha=0.5) + scale_size_area(max_size = 15, breaks = c(1000, 10000, 100000), labels=c("1K", "10K", "100K")) 
+#     # + scale_size_continuous(range = c(4,12)) 
+# p_lege = p_scatter + guides(colour = guide_legend(override.aes = list(alpha = 1, size=8))) # + opts(legend.position = c(0, 0.3))  
+# p_fi = p_lege + theme_bw() #+ theme(legend.position = "bottom")   
+# p_fi
+```
+
+```{r, echo=FALSE, results='asis'}
+suppressPackageStartupMessages(library(googleVis))
+bc2 <- gvisBubbleChart(data=sale, idvar="ID", 
+                        xvar="FreshFrozenDelicassen", 
+                        yvar="MilkGroceryDetergents", 
+                        colorvar="Channel", 
+                        sizevar="Total",
+       options=list(title="Main difference between customers",
+                    titleTextStyle='{fontSize: 25}',
+                    width=1000, height=700, legend='right',
+                    hAxis='{title:"revenue of Fresh+Frozen+Delicassen", minValue:190, maxValue:200000, logScale:true}',
+                    vAxis='{title:"revenue of Milk+Grocery+Detergents", minValue:190, maxValue:200000, logScale:true}',
+                    bubble='{opacity:0.3, textStyle:{color: "none"}}',
+                    sizeAxis='{minSize:3, maxSize:16}',
+                    sortBubblesBySize = TRUE
+                    )   
+)
+print(bc2, 'chart')     
+
+```
+
+
+
+#### Which of my customers are similar?
+
+We visualize similarity based on individual product categories (Fresh, Milk, Grocery, Frozen, Detergents, Delicassen) without explicit accounting for Total revenue and Channel. Similarity takes into account absolute and relative amounts of each product category. Notice that
+
+* Retail and Cafe customers are mostly automatically separated
+
+* Large, medium and low revenues are mostly  automatically clustered
+
+
+```{r, echo=FALSE, results='hide'}
+# tSNE
+#features = scale(log10(sale[,3:7]))
+features = log10(sale[,3:8])
+matri = as.matrix(features)
+
+set.seed(2)
+tsne <- Rtsne(matri, check_duplicates = FALSE, pca = FALSE, initial_dims=6,
+              perplexity=15, theta=0.1, dims=2, verbose=FALSE, max_iter=1000)
+
+ #sum(tsne$costs) #perple=5, 1-0.8 2- 0.79 #3-0.7955 # perplex15 1_0.7
+        
+embedding <- as.data.frame(tsne$Y)
+embedding = apply(embedding, 2, function(x){rescale(x, to=c(0,1))})
+#head(embedding)
+
+```
+
+```{r, echo=FALSE, results='asis', out.width=11, fig.height=5}
+cm1 = clickme("points", x=embedding, y_format = list(x = "", y = ""), dir = getwd(), file_name = "total.html",
+      color_groups=sale$Channel,
+      color_group_order=c("Retail", "Cafe"), 
+      names=rownames(sale), radius=sqrt(sale$Total/1000), opacity=0.3,
+      extra=sale[,c("Fresh", "Milk", "Grocery", "Frozen", "Detergents_Paper", "Delicassen")],
+      title = "Similar customers",
+      subtitle = "size ~ Total revenue")
+cm1$iframe()
+ 
+# * low-Fresh low-Frozen large-somethingElse customers are sitting at the top right
+# 
+# * low-Everyting customers are sitting at the top center
+# 
+# * more-Fresh-than-somethingElse customers are at the top left
+# 
+# * Fresh-and-Frozen customers are at the bottom left
+```
+
+The qualitative interpretation of individual clusters can be inferred by interactive examination of each point. Drag or zoom the picture for better resolution.   Notice that
+
+* customers with high Milk, Grocery, Detergent revenues and low Frozen revenue are at the top left (x~0.2, y>0.9)
+
+* relatively high Milk and Grocery revenues are at top middle (x~0.5, y~0.9)
+
+* relatively high Grocery and Detergent revenues at at top right (x~0.8, y~0.8)
+
+* relatively high Fresh and Frozen and low Detergent revenues are at middle left (x~0, y~0.6)
+
+* relatively large Fresh and Delicassen are at bottom left (x~0.1, y~0.2)
+
+* mostly Fresh is at at bottom middle (x~0.5, y~0)
+
+* balanced revenues (a little bit of everything) are at the middle right (x~0.4, y~0.6)
+
+
+
+
+
+
+### Contact: Olga Lalakulich olalakul@gmail.com ###
+
+### References ###
+
+[^data]: https://archive.ics.uci.edu/ml/datasets/Wholesale+customers 
+The data set is originated from a larger database referred on:
+Abreu, N. (2011). Analise do perfil do cliente Recheio e desenvolvimento de um sistema promocional. Mestrado em Marketing, ISCTE-IUL, Lisbon 
+
