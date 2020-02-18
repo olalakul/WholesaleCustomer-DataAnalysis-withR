@@ -9,19 +9,21 @@ This project is about analysis of the [Wholesale Customer Dataset](https://archi
 
 * Discriminant analysis
 
-![lda_qda_roc](1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/lda_qda_roc-1.png)
+<img src="1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/lda_qda_roc-1.png"  alt="ROC curve for LDA and QDA"  width=600 />
+
 
 * Factor analysis
 
 * Clustering
 
-![pam3_clusters](1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/pam3_clusters_nonintera-1.png)
+<img src="1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/pam3_clusters_nonintera-1.png"  alt="3 clusters from PAM"  width=700 />
 
-![pam3_silhouette](1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/pam3_silhouete-1.png)
+<img src="1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/pam3_silhouete-1.png"  alt="silhouette diagram for PAM"  width=600 />
+
 
 * Customer segmentation
 
-![discriminant_analysis](1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/segments25-1.png)
+<img src="1-WholesaleCustomer-MultivariateAnalysis/wholesale-multivariate_files/figure-html/segments25-1.png"  alt="segments of customers"  width=900 />
 
 Some segments are pretty interesting.
 
@@ -50,7 +52,7 @@ demonstates how customer similarity is applied to answer a specific business que
 To improve the segmentation in such a way, that it is tailored to predicting frozen products revenue,
 further improvement with Bayesian net is considered
 
-![networkForAllColumns](3-WholesaleCustomer-WhomSellMoreFrozenProducts/wholesale-moreFrozen_files/figure-html/network_all-1.png)
+<img src="3-WholesaleCustomer-WhomSellMoreFrozenProducts/wholesale-moreFrozen_files/figure-html/network_all-1.png"  alt="networkForAllColumns"  width=500 />
 
 
 
